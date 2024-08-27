@@ -1,0 +1,7 @@
+numpy>=1.26.4
+transformers>=4.37.2
+pandas>=2.2.0
+scikit-learn~=1.5.1
+torch>=2.2.0
+accelerate>=0.21.0
+tqdm~=4.66.5
