@@ -8,6 +8,8 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from sklearn.metrics import classification_report, f1_score, accuracy_score
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+n_gpu = torch.cuda.device_count()
+torch.cuda.get_device_name(0)
 
 
 class DataProcessor:
@@ -177,7 +179,7 @@ class ModelTrainer:
 
 
 def main():
-    batch_size = 4
+    batch_size = 32
     epochs = 6
     num_labels = 230
 
@@ -185,11 +187,9 @@ def main():
     eval_data = pd.read_csv('data/validate_data.csv', sep=';')
     tokenizer_name = "Rostlab/prot_bert"
     output_dir = 'output/'
-    data_processor = DataProcessor(train_data[0:10], eval_data[0:10], tokenizer_name, batch_size=batch_size)
+    data_processor = DataProcessor(train_data, eval_data, tokenizer_name, batch_size=batch_size)
     train_labels, eval_labels, train_seq, eval_seq, label_columns = data_processor.define_labels()
     train_encodings, eval_encodings = data_processor.calculate_embeddings()
-
-    # train_dataloader, validation_dataloader = DataProcessor.data_loader()
 
     train_inputs = torch.tensor(train_encodings.data['input_ids'])
     train_labels = torch.tensor(train_labels)
