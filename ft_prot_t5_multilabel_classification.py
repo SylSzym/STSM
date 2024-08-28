@@ -1,11 +1,12 @@
 import pandas as pd
 import numpy as np
-from tqdm import tqdm, trange
+from tqdm import trange
+import re
 import torch
-from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
-from torch.nn import BCEWithLogitsLoss, BCELoss
-from transformers import TrainingArguments, Trainer, AutoTokenizer, AutoModelForSequenceClassification
-from sklearn.metrics import classification_report, confusion_matrix, multilabel_confusion_matrix, f1_score, accuracy_score
+from torch.utils.data import TensorDataset, DataLoader
+from torch.nn import BCEWithLogitsLoss
+from transformers import T5Tokenizer, T5ForConditionalGeneration
+from sklearn.metrics import classification_report, f1_score, accuracy_score
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -31,9 +32,10 @@ class DataProcessor:
         labels_list_train = df_labels_train.values.astype(np.float32).tolist()
         labels_list_eval = df_labels_eval.values.astype(np.float32).tolist()
 
-        # prepare sequences - replace rare aminoacid add white spaces
+        # prepare sequences - replace rare aminoacid
         self.data_train['motif'] = self.data_train['motif'].apply(lambda x: " ".join(list(re.sub(r"[UZOB]", "X", x))))
         self.data_eval['motif'] = self.data_eval['motif'].apply(lambda x: " ".join(list(re.sub(r"[UZOB]", "X", x))))
+
 
         train_seq = self.data_train['motif'].tolist()
         train_labels = labels_list_train
@@ -44,16 +46,16 @@ class DataProcessor:
 
     def calculate_embeddings(self):
         train_labels, eval_labels, train_seq, eval_seq, label_columns = self.define_labels()
-        tokenizer = AutoTokenizer.from_pretrained(self.tokenizer, do_lower_case=False, max_length=512)
-        train_encodings = tokenizer(train_seq, padding="max_length", truncation=True, max_length=512)
-        eval_encodings = tokenizer(eval_seq, padding="max_length", truncation=True, max_length=512)
+        tokenizer = T5Tokenizer.from_pretrained(self.tokenizer, do_lower_case=False)
+        train_encodings = tokenizer.batch_encode_plus(train_seq, add_special_tokens=True, padding="longest", truncation=True, max_length=512)
+        eval_encodings = tokenizer.batch_encode_plus(eval_seq, add_special_tokens=True, padding="longest", truncation=True, max_length=512)
         return train_encodings, eval_encodings
 
 
 class ModelTrainer:
 
-    def __init__(self, model, num_labels, train_dataloader, validation_dataloader, tokenizer_name, eval_data,
-                 thresholds, epochs, batch_size, label_columns):
+    def __init__(self, model, num_labels, train_dataloader, validation_dataloader, tokenizer_name,
+                 eval_data, thresholds, epochs, batch_size, label_columns, output_dir):
         self.model = model
         self.num_labels = num_labels
         self.epochs = epochs
@@ -64,67 +66,72 @@ class ModelTrainer:
         self.eval_data = eval_data
         self.thresholds = thresholds
         self.label_columns = label_columns
+        self.output_dir = output_dir
 
     def train(self):
         train_loss_set = []
         val_f1_accuracy_list, val_flat_accuracy_list, training_loss_list, epochs_list = [], [], [], []
 
         for _ in trange(self.epochs, desc="Epoch "):
-            # Training
-
-            # Set our model to training mode
             self.model.train()
-
             # Tracking variables
             tr_loss = 0  # running loss
             nb_tr_examples, nb_tr_steps = 0, 0
-
             # Train the data for one epoch
             for step, batch in enumerate(self.train_dataloader):
                 # Add batch to GPU
                 batch = tuple(t.to(device) for t in batch)
                 # Unpack the inputs from our dataloader
                 b_input_ids, b_input_mask, b_labels = batch
-
-                outputs = self.model(b_input_ids, token_type_ids=None, attention_mask=b_input_mask)
+                decoder_input_ids = self.model._shift_right(b_input_ids)
+                outputs = self.model(input_ids=b_input_ids, attention_mask=b_input_mask, decoder_input_ids=decoder_input_ids)
                 logits = outputs[0]
+                protein_logits = []
+                for i in range(len(logits)):
+                    protein_logits.append(logits[i].mean(dim=0))
+                    protein_logits = torch.tensor(protein_logits)
+
+                logits = protein_logits
+
                 loss_func = BCEWithLogitsLoss()
+                # convert labels to float for calculation
                 loss = loss_func(logits.view(-1, self.num_labels),
-                                 b_labels.type_as(logits).view(-1,
-                                                               self.num_labels))  # convert labels to float for calculation
-
+                                 b_labels.type_as(logits).view(-1, self.num_labels))
                 train_loss_set.append(loss.item())
-
                 # Backward pass
                 loss.backward()
-
-                # scheduler.step()
                 # Update tracking variables
                 tr_loss += loss.item()
                 nb_tr_examples += b_input_ids.size(0)
                 nb_tr_steps += 1
-
             print("Train loss: {}".format(tr_loss / nb_tr_steps))
             training_loss_list.append(tr_loss / nb_tr_steps)
 
-    def evaluate(self, output_dir):
+    def evaluate(self):
         self.model.eval()
-        tokenizer = AutoTokenizer.from_pretrained(self.tokenizer, do_lower_case=False, max_length=512)
-        self.eval_data['motif'] = self.eval_data['motif'].apply(lambda x: x.replace("[UZOB]", "X"))
-        eval_seq = self.eval_data['motif'].tolist()
-        eval_labels = self.eval_data.loc[:, self.eval_data.columns.str.startswith('GO')].columns
+        self.eval_data['motif'] = self.eval_data['motif'].apply(lambda x: " ".join(list(re.sub(r"[UZOB]", "X", x))))
 
-        logit_preds, true_labels, pred_labels, tokenized_texts, val_f1_accuracy_list, val_flat_accuracy_list, clf_reports = [], [], [], [], [], [], []
+        logit_preds, true_labels, pred_labels, tokenized_texts, val_f1_accuracy_list, val_flat_accuracy_list, \
+            threshold_list, clf_reports = [], [], [], [], [], [], [], []
 
         # Predict
         for i, batch in enumerate(self.validation_dataloader):
             batch = tuple(t.to(device) for t in batch)
             # Unpack the inputs from our dataloader
             b_input_ids, b_input_mask, b_labels = batch
+            decoder_input_ids = self.model._shift_right(b_input_ids)
+
             with torch.no_grad():
                 # Forward pass
-                outs = self.model(b_input_ids, token_type_ids=None, attention_mask=b_input_mask)
+                outs = self.model(input_ids=b_input_ids, attention_mask=b_input_mask, decoder_input_ids = decoder_input_ids)
                 b_logit_pred = outs[0]
+                protein_logits_pred = []
+                for i in range(len(b_logit_pred)):
+                    protein_logits_pred.append(b_logit_pred[i].mean(dim=0))
+                    protein_logits_pred = torch.tensor(protein_logits_pred)
+
+                b_logit_pred = protein_logits_pred
+
                 pred_label = torch.sigmoid(b_logit_pred)
 
             b_logit_pred = b_logit_pred.detach().cpu().numpy()
@@ -152,23 +159,24 @@ class ModelTrainer:
             print('\n')
             val_f1_accuracy_list.append(val_f1_accuracy)
             val_flat_accuracy_list.append(val_flat_accuracy)
+            threshold_list.append(threshold)
             clf_report = classification_report(true_bools, pred_bools, target_names=self.label_columns,
                                                output_dict=True)
             clf_reports.append(clf_report)
             print('THRESHOLD:', threshold)
             print(clf_report)
 
-        df_best_threshold = pd.DataFrame({'Threshold': threshold, 'F1_Validation_Accuracy': val_f1_accuracy_list,
+        df_best_threshold = pd.DataFrame({'Threshold': threshold_list, 'F1_Validation_Accuracy': val_f1_accuracy_list,
                                           'Flat_Validation_Accuracy': val_flat_accuracy_list})
         df_clf_reports = pd.DataFrame(clf_reports)
         df_clf_reports.to_csv(self.output_dir + 'ft_prot_t5_clf_report.csv', sep=';', index=False)
         df_best_threshold.to_csv(self.output_dir + 'ft_prot_t5_best_threshold.csv', sep=';', index=False)
         return df_clf_reports, df_best_threshold
 
-    def save_model(self, output_dir):
+    def save_model(self):
         try:
-            self.model.save_pretrained(output_dir)
-            print(f"Model saved to {output_dir}")
+            self.model.save_pretrained(self.output_dir)
+            print(f"Model saved to {self.output_dir}")
         except Exception as e:
             print(f"Error saving model: {e}")
 
@@ -176,19 +184,16 @@ class ModelTrainer:
 def main():
     batch_size = 4
     epochs = 6
+    num_labels = 230
 
-    train_data = pd.read_csv('../data/output/ft_data.csv', sep=';')
-    eval_data = pd.read_csv('../data/output/validate_data.csv', sep=';')
-
-    tokenizer = AutoTokenizer.from_pretrained()
-    model = AutoModelForSeq2SeqLM.from_pretrained("Rostlab/prot_t5_xl_uniref50")
+    train_data = pd.read_csv('data/ft_data.csv', sep=';')
+    eval_data = pd.read_csv('data/validate_data.csv', sep=';')
     tokenizer_name = "Rostlab/prot_t5_xl_uniref50"
-    output_dir = '../output/'
+
+    output_dir = 'output/'
     data_processor = DataProcessor(train_data[0:10], eval_data[0:10], tokenizer_name, batch_size=batch_size)
     train_labels, eval_labels, train_seq, eval_seq, label_columns = data_processor.define_labels()
     train_encodings, eval_encodings = data_processor.calculate_embeddings()
-
-    num_labels = len(label_columns)
 
     # train_dataloader, validation_dataloader = DataProcessor.data_loader()
 
@@ -207,24 +212,21 @@ def main():
     validation_data = TensorDataset(validation_inputs, validation_masks, validation_labels, )
     validation_dataloader = DataLoader(validation_data, batch_size=batch_size)
 
-    # train_dataset = Dataset(train_encodings, train_labels)
-    #  eval_dataset = Dataset(eval_encodings, eval_labels)
-
     thresholds = np.arange(0, 1, 0.1)
 
-    model = AutoModelForSequenceClassification.from_pretrained(
+    model = T5ForConditionalGeneration.from_pretrained(
         "Rostlab/prot_t5_xl_uniref50",
         problem_type="multi_label_classification",
         num_labels=230
     )
-
+    model.to(device)
     model_trainer = ModelTrainer(model, num_labels, train_dataloader, validation_dataloader, tokenizer_name,
-                                 eval_data, thresholds, epochs, batch_size, label_columns)
+                                 eval_data, thresholds, epochs, batch_size, label_columns, output_dir)
     model_trainer.train()
-    model_trainer.save_model(output_dir + 'ft_protbert')
+    model_trainer.save_model()
 
-    clf_reports, best_threshold = model_trainer.evaluate(output_dir)
+    model_trainer.evaluate()
+
 
 if __name__ == "__main__":
     main()
-
