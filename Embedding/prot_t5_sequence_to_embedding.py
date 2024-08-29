@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
-from transformers import BertModel, BertTokenizer
+import re
+from transformers import T5Model, T5Tokenizer
 
 
 class DataProcessor:
@@ -17,7 +18,7 @@ class DataProcessor:
         labels_list = df_labels.values.astype(np.float32).tolist()
 
         # prepare sequences - replace rare aminoacid
-        self.input_file['motif'] = self.input_file['motif'].apply(lambda x: x.replace("[UZOB]", "X"))
+        self.input_file['motif'] = self.input_file['motif'].apply(lambda x: " ".join(list(re.sub(r"[UZOB]", "X", x))))
 
         input_seq = self.input_file['motif'].tolist()
         input_labels = labels_list
@@ -34,20 +35,31 @@ class EmbeddingProcessor:
     def get_embeddings(self):
 
         print('Calculating embeddings in progress ...')
-        tokenizer = BertTokenizer.from_pretrained(self.tokenizer_name, do_lower_case=False, max_length=512)
-        inputs = tokenizer(self.input_seq, padding="max_length", truncation=True, max_length=512,
+        tokenizer = T5Tokenizer.from_pretrained(self.tokenizer_name, do_lower_case=False, max_length=512)
+        inputs = tokenizer.batch_encode_plus(self.input_seq, padding="max_length", truncation=True, max_length=512,
                            return_tensors="pt")
-        outputs = self.model(**inputs)
+        # decoder_input_ids = self.model._shift_right(inputs['input_ids'])
+        outputs = self.model(**inputs, decoder_input_ids=None)
+        print(outputs)
         embeddings = pd.DataFrame(outputs['last_hidden_state'][0].tolist())
         return embeddings
+
+    # with torch.no_grad():
+    #     # Forward pass
+    #     outs = self.model(input_ids=b_input_ids, attention_mask=b_input_mask, decoder_input_ids=decoder_input_ids)
+    #     b_logit_pred = outs[0]
+    #     protein_logits_pred = []
+    #     for i in range(len(b_logit_pred)):
+    #         protein_logits_pred.append(b_logit_pred[i].mean(dim=0))
+    #         protein_logits_pred = torch.tensor(protein_logits_pred)
 
 
 def main():
     input_file = pd.read_csv('../data/test_data.csv', sep=';')
     input_file = input_file[0:10]
-    model_name = "Rostlab/prot_bert"
+    model_name = "Rostlab/prot_t5_xl_uniref50"
 
-    model = BertModel.from_pretrained(
+    model = T5Model.from_pretrained(
         model_name,
         problem_type="multi_label_classification",
         num_labels=230
@@ -62,7 +74,7 @@ def main():
     seq = pd.DataFrame(test_seq)
     seq.columns = ['motif']
     dataframe = pd.concat([uniprot_id, seq, embedding], axis=1)
-    dataframe.to_csv('../output/protbert_embeddings.csv', sep=';', index=False)
+    dataframe.to_csv('../output/prot_t5_embeddings.csv', sep=';', index=False)
 
 
 if __name__ == "__main__":

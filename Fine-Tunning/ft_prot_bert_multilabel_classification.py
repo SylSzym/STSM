@@ -172,6 +172,8 @@ class ModelTrainer:
 
     def save_model(self):
         try:
+            for param in self.model.parameters():
+                param.data = param.data.contiguous()
             self.model.save_pretrained(self.output_dir)
             print(f"Model saved to {self.output_dir}")
         except Exception as e:
