@@ -20,7 +20,7 @@ class DataProcessor:
 
     def define_labels(self):
         # Select label columns
-        label_columns = self.input_file.loc[:, self.input_file.columns.str.startswith('GO')].columns.to_list()
+        label_columns = self.data_train.loc[:, self.data_train.columns.str.startswith('GO')].columns.to_list()
 
         # Create a new DataFrame containing only the selected label columns
         df_labels_train = self.data_train[label_columns]
