@@ -32,19 +32,19 @@ class EmbeddingProcessor:
         self.input_seq = input_seq
 
     def get_embeddings(self):
-
-        print('Calculating embeddings in progress ...')
         tokenizer = BertTokenizer.from_pretrained(self.tokenizer_name, do_lower_case=False, max_length=512)
-        inputs = tokenizer(self.input_seq, padding="max_length", truncation=True, max_length=512,
-                           return_tensors="pt")
-        outputs = self.model(**inputs)
-        embeddings = pd.DataFrame(outputs['last_hidden_state'][0].tolist())
-        return embeddings
+        embeddings = []
+        for seq in self.input_seq:
+            input = tokenizer(seq, padding="max_length", truncation=True, max_length=512, return_tensors='pt')
+            output = self.model(**input)
+            embeddings.append(output['last_hidden_state'][0].tolist())
+        df_embeddings = pd.DataFrame(embeddings)
+        return df_embeddings
 
 
 def main():
     input_file = pd.read_csv('../data/test_data.csv', sep=';')
-    input_file = input_file
+    input_file = input_file[0:10]
     model_name = "Rostlab/prot_bert"
 
     model = BertModel.from_pretrained(
