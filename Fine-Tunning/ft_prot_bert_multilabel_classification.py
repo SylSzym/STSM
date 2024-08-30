@@ -8,8 +8,6 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from sklearn.metrics import classification_report, f1_score, accuracy_score
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-n_gpu = torch.cuda.device_count()
-torch.cuda.get_device_name(0)
 
 
 class DataProcessor:
@@ -21,9 +19,8 @@ class DataProcessor:
         self.batch_size = batch_size
 
     def define_labels(self):
-        not_chosen_columns = self.data_train.loc[:, ~self.data_train.columns.str.startswith('GO')]
         # Select label columns
-        label_columns = [col for col in self.data_train.columns if col not in not_chosen_columns]
+        label_columns = self.input_file.loc[:, self.input_file.columns.str.startswith('GO')].columns.to_list()
 
         # Create a new DataFrame containing only the selected label columns
         df_labels_train = self.data_train[label_columns]
