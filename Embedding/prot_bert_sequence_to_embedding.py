@@ -44,7 +44,7 @@ class EmbeddingProcessor:
 
 def main():
     input_file = pd.read_csv('../data/test_data.csv', sep=';')
-    input_file = input_file[0:10]
+    input_file = input_file
     model_name = "Rostlab/prot_bert"
 
     model = BertModel.from_pretrained(
@@ -62,7 +62,7 @@ def main():
     seq = pd.DataFrame(test_seq)
     seq.columns = ['motif']
     dataframe = pd.concat([uniprot_id, seq, embedding], axis=1)
-    dataframe.to_csv('../output/protbert_embeddings.csv', sep=';', index=False)
+    dataframe.to_csv('../output/protbert_test_embeddings.csv', sep=';', index=False)
 
 
 if __name__ == "__main__":
