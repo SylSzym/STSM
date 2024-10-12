@@ -38,25 +38,14 @@ class EmbeddingProcessor:
         tokenizer = T5Tokenizer.from_pretrained(self.tokenizer_name, do_lower_case=False, max_length=512)
         inputs = tokenizer.batch_encode_plus(self.input_seq, padding="max_length", truncation=True, max_length=512,
                            return_tensors="pt")
-        # decoder_input_ids = self.model._shift_right(inputs['input_ids'])
-        outputs = self.model(**inputs, decoder_input_ids=None)
+        outputs = self.model(**inputs, decoder_input_ids=self.model._shift_right(inputs['input_ids']))
         print(outputs)
         embeddings = pd.DataFrame(outputs['last_hidden_state'][0].tolist())
         return embeddings
 
-    # with torch.no_grad():
-    #     # Forward pass
-    #     outs = self.model(input_ids=b_input_ids, attention_mask=b_input_mask, decoder_input_ids=decoder_input_ids)
-    #     b_logit_pred = outs[0]
-    #     protein_logits_pred = []
-    #     for i in range(len(b_logit_pred)):
-    #         protein_logits_pred.append(b_logit_pred[i].mean(dim=0))
-    #         protein_logits_pred = torch.tensor(protein_logits_pred)
-
 
 def main():
     input_file = pd.read_csv('../data/test_data.csv', sep=';')
-    input_file = input_file[0:10]
     model_name = "Rostlab/prot_t5_xl_uniref50"
 
     model = T5Model.from_pretrained(
@@ -74,7 +63,7 @@ def main():
     seq = pd.DataFrame(test_seq)
     seq.columns = ['motif']
     dataframe = pd.concat([uniprot_id, seq, embedding], axis=1)
-    dataframe.to_csv('../output/prot_t5_embeddings.csv', sep=';', index=False)
+    dataframe.to_csv('../output/prot_t5/prot_t5_embeddings.csv', sep=';', index=False)
 
 
 if __name__ == "__main__":
