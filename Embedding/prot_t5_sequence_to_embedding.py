@@ -36,16 +36,17 @@ class EmbeddingProcessor:
 
         print('Calculating embeddings in progress ...')
         tokenizer = T5Tokenizer.from_pretrained(self.tokenizer_name, do_lower_case=False, max_length=512)
-        inputs = tokenizer.batch_encode_plus(self.input_seq, padding="max_length", truncation=True, max_length=512,
+        embeddings = []
+        for seq in self.input_seq:
+            inputs = tokenizer.batch_encode_plus(self.input_seq, padding="max_length", truncation=True, max_length=512,
                            return_tensors="pt")
-        outputs = self.model(**inputs, decoder_input_ids=self.model._shift_right(inputs['input_ids']))
-        print(outputs)
-        embeddings = pd.DataFrame(outputs['last_hidden_state'][0].tolist())
-        return embeddings
-
+            output = self.model(**inputs, decoder_input_ids=self.model._shift_right(inputs['input_ids']))
+            embeddings.append(output['last_hidden_state'][0].tolist())
+        df_embeddings = pd.DataFrame(embeddings)
+        return df_embeddings
 
 def main():
-    input_file = pd.read_csv('../data/test_data.csv', sep=';')
+    input_file = pd.read_csv('data/test_data.csv', sep=';')
     model_name = "Rostlab/prot_t5_xl_uniref50"
 
     model = T5Model.from_pretrained(
