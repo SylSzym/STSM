@@ -16,13 +16,15 @@ class DataProcessor:
         # Convert the label columns to lists for each row
         labels_list = df_labels.values.astype(np.float32).tolist()
 
+        df_id_motif = pd.concat([pd.DataFrame(self.input_file['UniqueID']), pd.DataFrame(self.input_file['motif'])], axis = 1)
+        df_id_motif.columns = ['UniqueID', 'motif']
+
         # prepare sequences - replace rare aminoacid
         self.input_file['motif'] = self.input_file['motif'].apply(lambda x: x.replace("[UZOB]", "X"))
 
         input_seq = self.input_file['motif'].tolist()
-        input_labels = labels_list
 
-        return input_labels, input_seq, label_columns
+        return input_seq, df_id_motif, df_labels
 
 
 class EmbeddingProcessor:
@@ -37,32 +39,30 @@ class EmbeddingProcessor:
         for seq in self.input_seq:
             input = tokenizer(seq, padding="max_length", truncation=True, max_length=512, return_tensors='pt')
             output = self.model(**input)
-            embeddings.append(output['last_hidden_state'][0].tolist())
+            token_representations = output['last_hidden_state']
+            # Skip tokens CLS and EOS (specjal tokens), calculate representative embbeddings for protein sequnece
+            embedding = token_representations[0,1:len(seq)+1].mean(0)
+            embeddings.append(embedding.detach().numpy())
         df_embeddings = pd.DataFrame(embeddings)
         return df_embeddings
 
 
 def main():
-    input_file = pd.read_csv('../data/test_data.csv', sep=';')
+    input_file = pd.read_csv('./data/test_data.csv', sep=';')
     input_file = input_file[0:10]
     model_name = "Rostlab/prot_bert"
 
     model = BertModel.from_pretrained(
-        model_name,
-        problem_type="multi_label_classification",
-        num_labels=230
+        model_name
     )
 
     data_processor = DataProcessor(input_file)
-    test_labels, test_seq, label_columns = data_processor.process_data()
+    test_seq, df_id_motif, df_labels = data_processor.process_data()
 
     embedding_processor = EmbeddingProcessor(model_name, model, test_seq)
     embedding = embedding_processor.get_embeddings()
-    uniprot_id = input_file['UniqueID']
-    seq = pd.DataFrame(test_seq)
-    seq.columns = ['motif']
-    dataframe = pd.concat([uniprot_id, seq, embedding], axis=1)
-    dataframe.to_csv('../output/protbert_test_embeddings.csv', sep=';', index=False)
+    dataframe = pd.concat([df_id_motif, embedding, df_labels], axis = 1)
+    dataframe.to_csv('./output/protbert_test_embeddings.csv', sep=';', index=False)
 
 
 if __name__ == "__main__":

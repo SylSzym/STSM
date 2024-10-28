@@ -53,7 +53,6 @@ class EmbeddingProcessor:
 
 def main():
     input_file = pd.read_csv('data/test_data.csv', sep=';')
-    input_file = input_file[0:10]
 
     model = esm.pretrained.esm2_t33_650M_UR50D()
 
